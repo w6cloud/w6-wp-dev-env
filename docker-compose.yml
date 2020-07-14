@@ -1,0 +1,157 @@
+version: "3"
+
+services:
+  #######################################
+  # Proxy
+  #######################################
+  proxy:
+    container_name: ${APP_NAME}-proxy
+    build:
+      context: ./services/proxy
+      dockerfile: Dockerfile
+    command: --api.insecure=true --providers.docker
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  #######################################
+  # Database
+  #######################################
+  db:
+    container_name: ${APP_NAME}-db
+    build:
+      context: ./services/db
+      dockerfile: Dockerfile
+    depends_on:
+      - proxy
+    environment:
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+    volumes:
+      - ./services/db/data:/var/lib/mysql:delegated
+    restart: always
+
+  #######################################
+  # Database Admin
+  #######################################
+  db-admin:
+    container_name: ${APP_NAME}-db-admin
+    build:
+      context: ./services/db-admin
+      dockerfile: Dockerfile
+    depends_on:
+      - db
+      - proxy
+    environment:
+      PMA_HOST: db
+      PMA_USER: ${DB_USER}
+      PMA_PASSWORD: ${DB_PASSWORD}
+    restart: always
+    volumes:
+      - /sessions
+    labels:
+      - "traefik.http.routers.${APP_NAME}-db-admin.rule=Host(`pma.${APP_NAME}.local`)"
+
+  #######################################
+  # Wordpress
+  #######################################
+  wordpress:
+    container_name: ${APP_NAME}-wordpress
+    build:
+      context: ./services/wordpress
+      dockerfile: Dockerfile
+    depends_on:
+      - db
+      - smtp
+      - proxy
+    restart: always
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: ${DB_NAME}
+      WORDPRESS_DB_USER: ${DB_USER}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
+      WORDPRESS_TABLE_PREFIX: ${DB_TABLE_PREFIX}
+    volumes:
+      - ./services/wordpress/php.ini:/usr/local/etc/php/conf.d/php.ini
+      - ./wordpress:/var/www/html:rw,cached
+    labels:
+      - "traefik.http.routers.${APP_NAME}-wordpress.rule=Host(`${APP_NAME}.local`)"
+
+  #######################################
+  # WP-CLI
+  #######################################
+  wp-cli:
+    container_name: ${APP_NAME}-wp-cli
+    build:
+      context: ./services/wp-cli
+      dockerfile: Dockerfile
+    depends_on:
+      - db
+      - wordpress
+      - proxy
+    restart: "no"
+    volumes:
+      - ./services/wordpress/php.ini:/usr/local/etc/php/conf.d/php.ini
+      - ./wordpress:/var/www/html:rw,cached
+    working_dir: /var/www/html
+
+  #######################################
+  # Composer
+  #######################################
+  composer:
+    container_name: ${APP_NAME}-composer
+    build:
+      context: ./services/composer
+      dockerfile: Dockerfile
+    depends_on:
+      - wordpress
+      - proxy
+    restart: "no"
+    volumes:
+      - ./wordpress:/var/www/html:rw,cached
+    working_dir: /var/www/html
+
+  #######################################
+  # Node
+  #######################################
+  node:
+    container_name: ${APP_NAME}-node
+    build:
+      context: ./services/node
+      dockerfile: Dockerfile
+    depends_on:
+      - wordpress
+      - proxy
+    volumes:
+      - ./wordpress:/app:rw,cached
+    restart: always
+    working_dir: /app
+    expose:
+      - 3000
+      - 3001
+    # command: sh -c 'cd wp-content/themes/sage && yarn && yarn start'
+    labels:
+      # - "traefik.tcp.services.${APP_NAME}-node.loadbalancer.server.port=3000"
+      - "traefik.tcp.routers.${APP_NAME}-node.rule=Host(`node.${APP_NAME}.local`)"
+
+  #######################################
+  # Smtp
+  #######################################
+  smtp:
+    container_name: ${APP_NAME}-smtp
+    build:
+      context: ./services/smtp
+      dockerfile: Dockerfile
+    depends_on:
+      - proxy
+    restart: always
+    expose:
+      - 80
+      - 25
+    labels:
+      - "traefik.http.services.${APP_NAME}-smtp.loadbalancer.server.port=80"
+      - "traefik.http.routers.${APP_NAME}-smtp.rule=Host(`smtp.${APP_NAME}.local`)"
