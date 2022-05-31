@@ -1,0 +1,164 @@
+version: "3"
+
+services:
+  #######################################
+  # Database
+  #######################################
+  db:
+    container_name: ${APP_NAME}-db
+    image: mariadb:10.8.3
+    environment:
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_RANDOM_ROOT_PASSWORD: "yes"
+    volumes:
+      - ./services/db/volumes/data:/var/lib/mysql:delegated
+    restart: unless-stopped
+    ports:
+      - 3306:3306
+    networks:
+      - ${APP_NAME}-network
+    labels:
+      - "traefik.enable=false"
+
+
+  #######################################
+  # Database Admin
+  #######################################
+  db-admin:
+    container_name: ${APP_NAME}-db-admin
+    image: phpmyadmin/phpmyadmin:5.2.0
+    depends_on:
+      - db
+    environment:
+      PMA_HOST: db
+      PMA_USER: ${DB_USER}
+      PMA_PASSWORD: ${DB_PASSWORD}
+    restart: unless-stopped
+    volumes:
+      - ./services/db/volumes/sessions:/sessions:rw,cached
+    networks:
+      - ${APP_NAME}-network
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.${APP_NAME}-db-admin-secure.entrypoints=websecure"
+      - "traefik.http.routers.${APP_NAME}-db-admin-secure.rule=Host(`pma.${HOST_NAME}`)"
+      - "traefik.http.routers.${APP_NAME}-db-admin-secure.service=${APP_NAME}-db-admin"
+      - "traefik.http.services.${APP_NAME}-db-admin.loadbalancer.server.port=8080"
+
+  #######################################
+  # Wordpress
+  #######################################
+  wordpress:
+    container_name: ${APP_NAME}-wordpress
+    build:
+      context: ./services/wordpress
+      dockerfile: Dockerfile
+    depends_on:
+      - db
+      - smtp
+    restart: unless-stopped
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: ${DB_NAME}
+      WORDPRESS_DB_USER: ${DB_USER}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
+      WORDPRESS_TABLE_PREFIX: ${DB_TABLE_PREFIX}
+    volumes:
+      - ./services/wordpress/config/php.ini:/usr/local/etc/php/conf.d/php.ini:rw,cached
+      - ./services/wordpress/volumes/wordpress:/var/www/html:rw,cached
+    networks:
+      - ${APP_NAME}-network
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.${APP_NAME}-wordpressv-secure.entrypoints=websecure"
+      - "traefik.http.routers.${APP_NAME}-wordpress-secure.rule=Host(`${HOST_NAME}`)"
+      - "traefik.http.routers.${APP_NAME}-wordpress-secure.service=${APP_NAME}-wordpress"
+      - "traefik.http.services.${APP_NAME}-wordpress.loadbalancer.server.port=80"
+
+  #######################################
+  # WP-CLI
+  #######################################
+  wp-cli:
+    container_name: ${APP_NAME}-wp-cli
+    build:
+      context: ./services/wp-cli
+      dockerfile: Dockerfile
+    depends_on:
+      - db
+      - wordpress
+    restart: "no"
+    volumes:
+      - ./services/wordpress/config/php.ini:/usr/local/etc/php/conf.d/php.ini:rw,cached
+      - ./services/wordpress/volumes/wordpress:/var/www/html:rw,cached
+    working_dir: /var/www/html
+    networks:
+      - ${APP_NAME}-network
+    labels:                                                                                                                                                                                                                              
+      - "traefik.enable=false"
+
+  #######################################
+  # Composer
+  #######################################
+  composer:
+    container_name: ${APP_NAME}-composer
+    image: composer:2.3.5
+    depends_on:
+      - wordpress
+    restart: "no"
+    volumes:
+      - ./services/wordpress/volumes/wordpress:/var/www/html:rw,cached
+    working_dir: /var/www/html
+    networks:
+      - ${APP_NAME}-network
+    labels:
+      - "traefik.enable=false"
+
+  #######################################
+  # Node
+  #######################################
+  node:
+    container_name: ${APP_NAME}-node
+    build:
+      context: ./services/node
+      dockerfile: Dockerfile
+    depends_on:
+      - wordpress
+    volumes:
+      - ./wordpress:/app:rw,cached
+    restart: "no"
+    working_dir: /app
+    networks:
+      - ${APP_NAME}-network
+    labels:
+      - "traefik.enable=false"
+
+  #######################################
+  # Smtp
+  #######################################
+  smtp:
+    container_name: ${APP_NAME}-smtp
+    image: maildev/maildev:2.0.5
+    restart: always
+    expose:
+      - 25
+    networks:
+      - ${APP_NAME}-network
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.${APP_NAME}-smtp-secure.entrypoints=websecure"
+      - "traefik.http.routers.${APP_NAME}-smtp-secure.rule=Host(`mail.${HOST_NAME}`)"
+      - "traefik.http.routers.${APP_NAME}-smtp-secure.service=${APP_NAME}-smtp"
+      - "traefik.http.services.${APP_NAME}-smtp.loadbalancer.server.port=80"
+
+networks:
+  - proxy:
+    external: true
+  - ${APP_NAME}-network:

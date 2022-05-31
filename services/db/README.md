@@ -1,3 +1,0 @@
-# DB
-
-Based on `MariaDB`.

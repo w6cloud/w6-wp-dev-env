@@ -1,4 +1,4 @@
-FROM wordpress:php7.4
+FROM wordpress:php8.1
 
 LABEL maintainer="WEB6 <contact@web6.fr>"
 
